@@ -1,0 +1,230 @@
+#!/bin/bash
+#vim: ft=sh
+set -ueo pipefail
+
+# globals
+cleanup_files=''
+unset fail
+unset quiet
+unset verbose
+unset input_type
+unset wait_viewer
+output_type=pdf
+
+windows_pdf_command='%LOCALAPPDATA%\Sumatrapdf\SumatraPDF.exe'
+
+input_type_file=${input_type_file:-${HOME}/.gv_config}
+
+info() {
+  [ -v quiet ] && : || echo >&2 "$1"
+}
+
+debug() {
+  [ -v verbose ] && echo >&2 "$1" || :
+}
+
+fail() {
+  unset quiet
+  info "FAILURE: $1"
+  # eat stdin
+  #cat ->/dev/null
+  exit -1 
+}
+
+usage() {
+  info ''
+  info 'GUI View - format and display stdin in a GUI window'
+  info ''
+  info 'usage:  gv [-v] [-i text] [-o pdf|-]'
+  info ''
+  info '  -v verbose; output progress messages to stderr'
+  info '  -i input_type: auto|text'
+  info '  -o output_type: pdf|- ( - for stdout)'
+  info '  -w wait for viewer'
+  info ''
+  exit 
+}
+
+cleanup() {
+  debug "cleaning up $cleanup_files"
+  for file in $cleanup_files; do
+    [ -v verbose ] && cmd="rm -v -f" || cmd="rm -f"
+    $cmd >&2 "$file"
+  done
+}
+
+trap cleanup EXIT
+
+add_cleanup() {
+  debug "adding cleanup file $1"
+  cleanup_files="$cleanup_files $1"
+}
+
+mkbuf() {
+  name=$(tempfile)
+  debug "created temporary file $name"
+  echo $name
+}
+
+input() {
+  debug "begin input"
+  buffer=$(mkbuf)
+  add_cleanup $buffer
+  cat ->$buffer
+  if [ -v input_type ]; then
+    debug "skipping auto-detect"
+  else
+    debug "auto-detecting input type"
+    input_type="$(file -b $buffer)"
+    info "detected input type: $input_type"
+    input_type="$(map_input_type "$input_type")"
+  fi
+  cat $buffer 
+  debug "end input"
+}
+
+init_input_types() {
+  if [ -r "$input_type_file" ]; then
+    debug "reading input types from $input_type_file"
+  else
+    debug "writing input type file $input_type_file"
+    cat >${input_type_file} -<<EOF
+text UTF-8 Unicode text
+text Bourne-Again shell script, ASCII text executable
+text ASCII text
+dvi TeX DVI file
+pdf PostScript document text conforming DSC level 3.0
+pdf PDF [Dd]ocument.*
+ps [Pp]ost[Ss]cript.*
+image PNG [Ii]mage.* 
+EOF
+  fi
+}
+
+map_input_type() {
+  init_input_types
+  debug "mapping input type '$1'"
+  echo "$( (
+    match=$1
+    while read type pattern; do
+      debug "read: type=$type pattern='$pattern'"
+      if [[ $1 =~ $pattern ]]; then
+	info "(mapped to: $type)"
+  	match=$type
+  	break 2
+      fi
+    done
+    echo $match
+  )<$input_type_file)"
+}
+
+process_text() {
+  enscript -q -B -o -
+}
+
+process_pdf() {
+  cat -
+}
+
+process_ps() {
+  ps2pdf - -
+}
+
+process_dvi() {
+  dvips -f | ps2pdf - -
+}
+
+process_image() {
+  output_type=image
+  cat -
+}
+
+
+process() {
+  debug "begin processing"
+  debug "type=$input_type"
+  case "$input_type" in
+    dvi) process_dvi;;
+    text) process_text;;
+    ps) process_ps;;
+    pdf) process_pdf;;
+    image) process_image;;
+    *) fail "Sorry, I don't know how to process input of type '$input_type'.";;
+  esac
+  debug "end processing"
+}
+
+output_pdf() {
+  debug "output: windows pdf viewer"
+  windows_file=$(tempfile -d ~/win/Downloads -s .pdf)
+  cat ->$windows_file
+  [ -v wait_viewer ] && wait='/WAIT' || wait=''
+  command="start ${wait} ${windows_pdf_command} %USERPROFILE%\\Downloads\\$(basename $windows_file)"
+  cmd 2>/dev/null /C "${command}"
+}
+
+output_stdout() {
+  debug "output:stdout"
+  cat -
+}
+
+output_image() {
+  debug "output:sxiv"
+  bufimage=$(mkbuf)
+  add_cleanup $bufimage
+  cat ->$bufimage
+  sxiv -f $bufimage
+}
+
+output(){
+  debug "begin output"
+  case "$output_type" in
+    pdf) output_pdf;;
+    -) output_stdout;;
+    image) output_image;;
+    *) fail "Sorry, I don't understand output type '$input_type'.";;
+  esac
+  debug "end output"
+}
+
+view() {
+  bufin=$(mkbuf)
+  add_cleanup $bufin
+  bufout=$(mkbuf)
+  add_cleanup $bufout
+
+  input >$bufin
+  process <$bufin >$bufout
+  output <$bufout
+}
+
+
+#   -) [[ $OPTARG == 'help' ]] && usage || fail invalid_option "$OPTARG";;
+invalid_option() {
+  [[ $1 = "--help" ]] && usage
+  fail "invalid option: $1"
+}
+
+while getopts ":vqi:o:wh" opt; do
+  case ${opt} in
+    i) input_type=$OPTARG;;
+    o) output_type=$OPTARG;;
+    q) quiet=1;;
+    v) verbose=1;;
+    w) wait_viewer=1;;
+    :) fail "$OPTARG requires an argument.";;
+    \?) invalid_option "$1";;
+    h) usage;;
+  esac
+done
+shift $((OPTIND -1))
+
+if [[ $# = 0 ]]; then 
+  [ -v fail ] || view
+else
+  while [[ $# > 0 ]]; do
+    [[ $1 = --help ]] && usage
+    cat $1 | view
+    shift
+  done
+fi
