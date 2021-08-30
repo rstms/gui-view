@@ -220,8 +220,10 @@ done
 shift $((OPTIND -1))
 
 if [[ $# = 0 ]]; then 
-  [ -v fail ] || view
+  # no args, so process stdin
+  view
 else
+  # filename args were provided
   while [[ $# > 0 ]]; do
     [[ $1 = --help ]] && usage
     cat $1 | view
