@@ -4,12 +4,10 @@ set -ueo pipefail
 
 # globals
 cleanup_files=''
-unset fail
 unset quiet
 unset verbose
 unset input_type
-unset wait_viewer
-output_type=pdf
+output_type=${GV_DEFAULT_OUTPUT:-pdf}
 
 windows_pdf_command='%LOCALAPPDATA%\Sumatrapdf\SumatraPDF.exe'
 
@@ -32,15 +30,15 @@ fail() {
 }
 
 usage() {
+  unset quiet
   info ''
-  info 'GUI View - format and display stdin in a GUI window'
+  info 'GUI View - format and display input file or stdin in a GUI window'
   info ''
-  info 'usage:  gv [-v] [-i text] [-o pdf|-]'
+  info 'usage:  gv [-v] [-i INPUT_TYPE] [-o VIEWER_TYPE |-] [FILE...]'
   info ''
   info '  -v verbose; output progress messages to stderr'
-  info '  -i input_type: auto|text'
-  info '  -o output_type: pdf|- ( - for stdout)'
-  info '  -w wait for viewer'
+  info '  -i input_type: auto|text|pdf|ps|image'
+  info '  -o viewer_type: pdf|- ( - for stdout)'
   info ''
   exit 
 }
@@ -156,10 +154,10 @@ process() {
 
 output_pdf() {
   debug "output: windows pdf viewer"
-  windows_file=$(tempfile -d ~/win/Downloads -s .pdf)
-  cat ->$windows_file
-  [ -v wait_viewer ] && wait='/WAIT' || wait=''
-  command="start ${wait} ${windows_pdf_command} %USERPROFILE%\\Downloads\\$(basename $windows_file)"
+  bufview=$(tempfile -d ~/win/Downloads -p preview_ -s .pdf)
+  cat ->$bufview
+  add_cleanup $bufview
+  command="start /WAIT ${windows_pdf_command} %USERPROFILE%\\Downloads\\$(basename $bufview)"
   cmd 2>/dev/null /C "${command}"
 }
 
@@ -187,6 +185,7 @@ output(){
   debug "end output"
 }
 
+# main function 
 view() {
   bufin=$(mkbuf)
   add_cleanup $bufin
@@ -205,13 +204,12 @@ invalid_option() {
   fail "invalid option: $1"
 }
 
-while getopts ":vqi:o:wh" opt; do
+while getopts ":vqi:o:nh" opt; do
   case ${opt} in
     i) input_type=$OPTARG;;
     o) output_type=$OPTARG;;
     q) quiet=1;;
     v) verbose=1;;
-    w) wait_viewer=1;;
     :) fail "$OPTARG requires an argument.";;
     \?) invalid_option "$1";;
     h) usage;;
